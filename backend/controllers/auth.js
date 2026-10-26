@@ -54,15 +54,15 @@ const loginUser = async (req, res) => {
 
     const user = result.rows[0];
 
-    // 3. Check if password is hashed (bcrypt) or plaintext
-    let isMatch = false;
-    if (user.password.startsWith('$2b$') || user.password.startsWith('$2a$')) {
-      // Password is hashed with bcrypt
-      isMatch = await bcrypt.compare(password, user.password);
-    } else {
-      // Password is plaintext (legacy) - compare directly
-      isMatch = (password === user.password);
+    const storedPassword = user.password || '';
+    const isHashed =
+      storedPassword.startsWith('$2a$') ||
+      storedPassword.startsWith('$2b$') ||
+      storedPassword.startsWith('$2y$');
+    if (!isHashed) {
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
+    const isMatch = await bcrypt.compare(password, storedPassword);
 
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });

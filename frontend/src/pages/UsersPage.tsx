@@ -7,6 +7,7 @@ import UserModal from '../components/modals/UserModal';
 import ConfirmModal from '../components/modals/ConfirmModal';
 import { useToastStore } from '../stores/toastStore';
 import type { User } from '../stores/userStore';
+import PageHeader from '../components/PageHeader';
 
 function UsersPage() {
   const { role, userId } = useAuthStore();
@@ -108,33 +109,29 @@ function UsersPage() {
 
 
   return (
-    <div className="container mx-auto px-4 py-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-white">👥 All Users</h1>
+    <div>
+      <PageHeader
+        title="Users"
+        description={`${filteredUsers.length.toLocaleString('en-IN')} people`}
+        actions={
+          (role === 'super_admin' || role === 'admin') ? (
+            <>
+              <button type="button" className="btn btn-primary" onClick={handleAddUser}>
+                <Plus size={16} />
+                Add User
+              </button>
+              <button type="button" className="btn btn-danger" onClick={() => setShowBulkConfirm(true)}>
+                <Ban size={16} />
+                Inactivate All
+              </button>
+            </>
+          ) : null
+        }
+      />
 
-        {(role === 'super_admin' || role === 'admin') && (
-          <div className="flex gap-3">
-            <button
-              className="btn btn-primary flex items-center"
-              onClick={handleAddUser}
-            >
-              <Plus className="mr-2" size={18} />
-              Add User
-            </button>
-            <button
-              className="btn btn-danger flex items-center"
-              onClick={() => setShowBulkConfirm(true)}
-            >
-              <Ban className="mr-2" size={18} />
-              Inactivate All
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="overflow-x-auto max-h-[80vh] border border-gray-700 rounded-lg">
-        <table className="min-w-full text-sm text-left text-gray-300">
-          <thead className="bg-gray-700 uppercase text-xs text-gray-400 sticky top-0">
+      <div className="table-panel max-h-[80vh] overflow-auto">
+        <table className="min-w-full text-left text-sm text-gray-300">
+          <thead className="sticky top-0 bg-shell text-xs uppercase text-gray-400">
             <tr>
               <th className="p-3">Name</th>
               <th className="p-3">Email</th>
@@ -147,9 +144,16 @@ function UsersPage() {
               )}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-700 bg-gray-800">
+          <tbody className="divide-y divide-line">
+            {filteredUsers.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-3 py-10 text-center text-sm text-gray-400">
+                  No users to show.
+                </td>
+              </tr>
+            )}
             {filteredUsers.map((user) => (
-              <tr key={user.id}>
+              <tr key={user.id} className="hover:bg-surface-hover">
                 <td className="p-3">{user.displayName}</td>
                 <td className="p-3">{user.email}</td>
                 <td className="p-3">{user.phoneNumber}</td>
@@ -186,14 +190,18 @@ function UsersPage() {
                 {(role === 'super_admin' || role === 'admin') && (
                   <td className="p-3 flex gap-2">
                     <button
+                      type="button"
+                      aria-label={`Edit ${user.displayName}`}
                       onClick={() => handleEditUser(user)}
-                      className="text-blue-400 hover:text-blue-300"
+                      className="icon-btn text-sky-300"
                     >
                       <Pencil size={16} />
                     </button>
                     <button
+                      type="button"
+                      aria-label={`Delete ${user.displayName}`}
                       onClick={() => handleDeleteUser(user.id)}
-                      className="text-red-400 hover:text-red-300"
+                      className="icon-btn icon-btn-danger"
                     >
                       <Trash2 size={16} />
                     </button>

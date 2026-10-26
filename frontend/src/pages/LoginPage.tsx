@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useNavigate } from 'react-router-dom';
 import { useToastStore } from '../stores/toastStore';
+import { homePathForRole } from '../utils/homePath';
 
 function LoginPage() {
   const [email, setEmail] = useState('');
@@ -48,43 +49,48 @@ function LoginPage() {
         addToast('Logged in successfully', 'success');
       }
 
-      navigate('/');
+      navigate(homePathForRole(role));
     }
   }, [error, isAuthenticated, addToast, navigate]);
 
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900 px-6">
-      <div className="bg-gray-800 p-8 rounded-lg shadow-md w-full max-w-md">
-        <h2 className="text-2xl font-bold text-center text-white mb-6">Login</h2>
+    <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
+      <div className="w-full max-w-md rounded-xl border border-line bg-surface p-8 shadow-xl">
+        <p className="text-center text-xs uppercase tracking-[0.18em] text-gray-500">Dream Trade</p>
+        <h1 className="mb-6 mt-2 text-center text-2xl font-semibold tracking-tight text-white">Login</h1>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="text-gray-300 block mb-1">Email</label>
+            <label htmlFor="email" className="form-label">Email</label>
             <input
+              id="email"
               type="email"
-              className="form-input w-full"
+              className="form-input"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
+              autoComplete="username"
               required
             />
           </div>
 
           <div>
-            <label className="text-gray-300 block mb-1">Password</label>
+            <label htmlFor="password" className="form-label">Password</label>
             <input
+              id="password"
               type="password"
-              className="form-input w-full"
+              className="form-input"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
+              autoComplete="current-password"
               required
             />
           </div>
 
           {errorMsg && (
-            <div className="text-red-400 text-sm">{errorMsg}</div>
+            <div className="text-sm text-red-400" role="alert">{errorMsg}</div>
           )}
 
           <button

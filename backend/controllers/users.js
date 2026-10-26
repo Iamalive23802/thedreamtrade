@@ -1,8 +1,22 @@
 const { query } = require('../db');
 const bcrypt = require('bcrypt');
+const {
+  ROLES,
+  canManageUsers,
+  userListScope,
+  canAssignRole,
+  canModifyUser,
+} = require('../utils/userAccess');
 
-// Salt rounds for bcrypt password hashing
 const SALT_ROUNDS = 10;
+
+const FULL_USER_COLUMNS = `
+  u.id, u.display_name, u.email, u.phone_number, u.role, u.status, u.team_id, t.name AS team_name
+`;
+const DIRECTORY_COLUMNS = `
+  u.id, u.display_name, u.role, u.status, u.team_id, t.name AS team_name
+`;
+const RETURNING_COLUMNS = 'id, display_name, email, phone_number, role, status, team_id';
 
 const normalizePhone = (p) => String(p ?? '').replace(/\D/g, '').trim();
 
@@ -11,11 +25,36 @@ const normalizeOptionalString = (v) => {
   return s === '' ? null : s;
 };
 
-// Get all users with team name
+const deny = (res, status, error) => res.status(status).json({ error });
+
 const getAllUsers = async (req, res) => {
   try {
+    const scope = userListScope(req.user?.role);
+    if (scope === 'none') {
+      return deny(res, 403, 'Forbidden');
+    }
+
+    if (scope === 'team') {
+      const me = await query('SELECT team_id FROM users WHERE id = $1', [req.user.id]);
+      const teamId = me.rows[0]?.team_id;
+      if (!teamId) return res.json([]);
+      const result = await query(
+        `SELECT ${FULL_USER_COLUMNS}
+         FROM users u
+         LEFT JOIN teams t ON u.team_id = t.id
+         WHERE u.team_id = $1
+         ORDER BY u.display_name`,
+        [teamId]
+      );
+      return res.json(result.rows);
+    }
+
+    const columns = scope === 'directory' ? DIRECTORY_COLUMNS : FULL_USER_COLUMNS;
     const result = await query(
-      'SELECT u.*, t.name AS team_name FROM users u LEFT JOIN teams t ON u.team_id = t.id ORDER BY u.display_name'
+      `SELECT ${columns}
+       FROM users u
+       LEFT JOIN teams t ON u.team_id = t.id
+       ORDER BY u.display_name`
     );
     res.json(result.rows);
   } catch (err) {
@@ -25,6 +64,10 @@ const getAllUsers = async (req, res) => {
 };
 
 const addUser = async (req, res) => {
+  if (!canManageUsers(req.user?.role)) {
+    return deny(res, 403, 'Forbidden');
+  }
+
   const {
     displayName,
     email,
@@ -38,6 +81,9 @@ const addUser = async (req, res) => {
   try {
     if (!displayName || !email || !phoneNumber || !password || !role || !status) {
       return res.status(400).json({ error: 'displayName, email, phoneNumber, password, role, and status are required' });
+    }
+    if (!ROLES.includes(role) || !canAssignRole(req.user.role, role)) {
+      return deny(res, 403, 'You cannot assign that role');
     }
 
     const phoneNorm = normalizePhone(phoneNumber);
@@ -58,23 +104,19 @@ const addUser = async (req, res) => {
     }
 
     const safeTeamId = normalizeOptionalString(team_id);
-    
-    // Hash password before storing
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
     const result = await query(
       `INSERT INTO users
         (display_name, email, phone_number, password, role, status, team_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
+       RETURNING ${RETURNING_COLUMNS}`,
       [displayName, email, phoneNorm, hashedPassword, role, status, safeTeamId]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('[❌ addUser Error]', err);
-    // Convert common constraint failures into client-friendly responses
     if (err?.code === '23505') {
-      // Unique violation (e.g., users_email_key)
       return res.status(409).json({ error: 'User already exists' });
     }
     res.status(500).json({ error: 'Failed to add user' });
@@ -82,6 +124,10 @@ const addUser = async (req, res) => {
 };
 
 const updateUser = async (req, res) => {
+  if (!canManageUsers(req.user?.role)) {
+    return deny(res, 403, 'Forbidden');
+  }
+
   const { id } = req.params;
   const {
     displayName,
@@ -94,6 +140,18 @@ const updateUser = async (req, res) => {
   } = req.body;
 
   try {
+    if (!ROLES.includes(role) || !canAssignRole(req.user.role, role)) {
+      return deny(res, 403, 'You cannot assign that role');
+    }
+
+    const existingUser = await query('SELECT id, role FROM users WHERE id = $1', [id]);
+    if (existingUser.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (!canModifyUser(req.user.role, existingUser.rows[0].role)) {
+      return deny(res, 403, 'You cannot change a super admin');
+    }
+
     const phoneNorm = normalizePhone(phoneNumber);
     const existing = await query(
       'SELECT id FROM users WHERE phone_number = $1 AND id <> $2',
@@ -104,8 +162,6 @@ const updateUser = async (req, res) => {
     }
 
     const safeTeamId = normalizeOptionalString(team_id);
-
-    // Build dynamic update query so password remains unchanged when not provided
     const values = [displayName, email, phoneNorm, role, status, safeTeamId];
     let setClause = `
         display_name = $1,
@@ -126,7 +182,8 @@ const updateUser = async (req, res) => {
 
     const result = await query(
       `UPDATE users SET${setClause}
-       WHERE id = $${values.length} RETURNING *`,
+       WHERE id = $${values.length}
+       RETURNING ${RETURNING_COLUMNS}`,
       values
     );
     res.json(result.rows[0]);
@@ -139,11 +196,22 @@ const updateUser = async (req, res) => {
   }
 };
 
-// Delete user by ID
 const deleteUser = async (req, res) => {
+  if (!canManageUsers(req.user?.role)) {
+    return deny(res, 403, 'Forbidden');
+  }
+
   const { id } = req.params;
 
   try {
+    const existingUser = await query('SELECT id, role FROM users WHERE id = $1', [id]);
+    if (existingUser.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (!canModifyUser(req.user.role, existingUser.rows[0].role)) {
+      return deny(res, 403, 'You cannot delete a super admin');
+    }
+
     await query('DELETE FROM users WHERE id = $1', [id]);
     res.status(204).end();
   } catch (err) {
@@ -152,8 +220,11 @@ const deleteUser = async (req, res) => {
   }
 };
 
-// ✅ Bulk inactivate users (best practice)
 const bulkInactivateUsers = async (req, res) => {
+  if (!canManageUsers(req.user?.role)) {
+    return deny(res, 403, 'Forbidden');
+  }
+
   const { userIds } = req.body;
 
   if (!Array.isArray(userIds) || userIds.length === 0) {
@@ -162,16 +233,18 @@ const bulkInactivateUsers = async (req, res) => {
 
   try {
     const placeholders = userIds.map((_, idx) => `$${idx + 1}`).join(',');
-    const queryText = `UPDATE users SET status = 'Inactive' WHERE id IN (${placeholders})`;
-    await query(queryText, userIds);
-    res.json({ success: true, updatedCount: userIds.length });
+    const protectSuperAdmins = req.user.role !== 'super_admin';
+    const queryText = protectSuperAdmins
+      ? `UPDATE users SET status = 'Inactive' WHERE id IN (${placeholders}) AND role <> 'super_admin'`
+      : `UPDATE users SET status = 'Inactive' WHERE id IN (${placeholders})`;
+    const result = await query(queryText, userIds);
+    res.json({ success: true, updatedCount: result.rowCount });
   } catch (err) {
     console.error('[❌ bulkInactivateUsers Error]', err);
     res.status(500).json({ error: 'Failed to inactivate users' });
   }
 };
 
-// Export all
 module.exports = {
   getAllUsers,
   addUser,

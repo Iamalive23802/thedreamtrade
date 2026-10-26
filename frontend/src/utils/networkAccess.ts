@@ -1,5 +1,6 @@
 import axios from 'axios';
 import API_BASE from './apiBase';
+import { decryptResponseData } from './responseCrypto';
 
 export interface NetworkAccessResponse {
   restrictionEnabled: boolean;
@@ -11,7 +12,7 @@ export async function checkNetworkAccess(): Promise<NetworkAccessResponse> {
   const response = await axios.get<NetworkAccessResponse>(`${API_BASE}/auth/network-check`, {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined
   });
-  return response.data;
+  return decryptResponseData(response.data);
 }
 
 export function isNetworkRestrictedError(error: unknown): boolean {

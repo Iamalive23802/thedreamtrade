@@ -189,3 +189,37 @@ export const formatLeadNotes = (
     })
     .join('||');
 };
+
+const rmNamesMatch = (a?: string, b?: string) =>
+  sanitizeRmName(a || '').toLowerCase() === sanitizeRmName(b || '').toLowerCase();
+
+/** Previous-RM rows are super_admin-only; others see current assignee / own / unnamed. */
+export const isNoteVisibleToViewer = (
+  rmName: string | undefined,
+  opts: { role?: string | null; viewerRmName?: string; assignedRmName?: string }
+): boolean => {
+  if (opts.role === 'super_admin') return true;
+
+  const rm = sanitizeRmName(rmName || '');
+  if (!rm || rm === '—') return true;
+  if (opts.assignedRmName && rmNamesMatch(rm, opts.assignedRmName)) return true;
+  if (opts.viewerRmName && rmNamesMatch(rm, opts.viewerRmName)) return true;
+  return false;
+};
+
+export const filterNoteHistoryForViewer = (
+  entries: NoteHistoryEntry[],
+  opts: { role?: string | null; viewerRmName?: string; assignedRmName?: string }
+): NoteHistoryEntry[] => {
+  if (opts.role === 'super_admin') return entries;
+  return entries.filter((entry) => isNoteVisibleToViewer(entry.rmName, opts));
+};
+
+export const filterLeadNotesForViewer = (
+  notes: string,
+  opts: { role?: string | null; viewerRmName?: string; assignedRmName?: string }
+): NoteEntry[] => {
+  return parseLeadNotes(notes).filter((entry) =>
+    isNoteVisibleToViewer(entry.rmName, opts)
+  );
+};

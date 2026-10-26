@@ -3,6 +3,7 @@ const router = express.Router();
 
 const {
   getLeads,
+  getPaidClients,
   addLead,
   updateLead,
   deleteLead,
@@ -10,12 +11,15 @@ const {
   assignLead,
   googleSheetsUpload,
   getNewLeadsCount,
-  getFreeTrialAlerts
+  getFreeTrialAlerts,
+  getStarPerformers
 } = require('../controllers/leads');
 
 router.get('/', getLeads);
+router.get('/paid-clients', getPaidClients);
 router.get('/new-count', getNewLeadsCount);
 router.get('/free-trial-alerts', getFreeTrialAlerts);
+router.get('/star-performers', getStarPerformers);
 router.post('/', addLead);
 router.put('/:id', updateLead);
 router.delete('/:id', deleteLead);

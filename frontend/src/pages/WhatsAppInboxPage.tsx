@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, CheckCheck, MessageCircle, Paperclip, Search, Send } from 'lucide-react';
+import { Check, CheckCheck, ChevronLeft, MessageCircle, Paperclip, Search, Send } from 'lucide-react';
 import moment from 'moment';
 import { useWhatsAppStore } from '../stores/whatsappStore';
 import { useToastStore } from '../stores/toastStore';
@@ -82,10 +82,10 @@ function WhatsAppInboxPage() {
   };
 
   return (
-    <div className="h-full flex bg-gray-950 text-white">
-      <aside className="w-80 border-r border-gray-800 flex flex-col">
-        <div className="p-4 border-b border-gray-800">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
+    <div className="flex h-full bg-canvas text-white">
+      <aside className={`${selectedId ? 'hidden md:flex' : 'flex'} w-full shrink-0 flex-col border-r border-line md:w-80`}>
+        <div className="p-4 border-b border-line">
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
             <MessageCircle size={18} />
             WhatsApp
           </h2>
@@ -114,8 +114,8 @@ function WhatsAppInboxPage() {
                 shouldStick.current = true;
                 selectConversation(item.id);
               }}
-              className={`w-full text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800 ${
-                selectedId === item.id ? 'bg-gray-800' : ''
+              className={`w-full border-b border-line px-4 py-3 text-left transition-colors hover:bg-surface ${
+                selectedId === item.id ? 'bg-surface' : ''
               }`}
             >
               <div className="flex items-center justify-between gap-2">
@@ -140,13 +140,21 @@ function WhatsAppInboxPage() {
         </div>
       </aside>
 
-      <section className="flex-1 flex flex-col min-w-0">
+      <section className={`${selectedId ? 'flex' : 'hidden md:flex'} min-w-0 flex-1 flex-col`}>
         {!conversation ? (
           <div className="flex-1 flex items-center justify-center text-gray-500">Select a conversation</div>
         ) : (
           <>
-            <header className="px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-3">
-              <div className="min-w-0">
+            <header className="flex items-center justify-between gap-3 border-b border-line px-3 py-3 md:px-5">
+              <button
+                type="button"
+                className="icon-btn shrink-0 md:hidden"
+                aria-label="Back to chats"
+                onClick={() => selectConversation(null)}
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <div className="min-w-0 flex-1">
                 <h3 className="font-semibold truncate">
                   {conversation.contact_name || conversation.phone || conversation.wa_id}
                 </h3>
@@ -180,7 +188,7 @@ function WhatsAppInboxPage() {
                 const mine = message.direction === 'outbound';
                 return (
                   <div key={message.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[75%] rounded-lg px-3 py-2 ${mine ? 'bg-blue-600' : 'bg-gray-800'}`}>
+                    <div className={`max-w-[75%] rounded-lg px-3 py-2 ${mine ? 'bg-primary' : 'bg-surface'}`}>
                       {['image', 'audio', 'video', 'document', 'sticker'].includes(message.type) && (
                         <WhatsAppMedia message={message} />
                       )}
@@ -200,15 +208,16 @@ function WhatsAppInboxPage() {
                 );
               })}
             </div>
-            {error && <div className="px-4 py-2 text-sm text-red-300 border-t border-gray-800">{error}</div>}
-            <footer className="p-3 border-t border-gray-800">
+            {error && <div className="px-4 py-2 text-sm text-red-300 border-t border-line">{error}</div>}
+            <footer className="p-3 border-t border-line">
               <div className="flex items-end gap-2">
-                <button type="button" className="btn bg-gray-800 hover:bg-gray-700" onClick={() => setTemplateOpen(true)}>
+                <button type="button" className="btn btn-secondary" onClick={() => setTemplateOpen(true)}>
                   Template
                 </button>
                 <button
                   type="button"
-                  className="btn bg-gray-800 hover:bg-gray-700"
+                  className="btn btn-secondary"
+                  aria-label="Attach file"
                   disabled={!conversation.session_open || sending}
                   onClick={() => fileRef.current?.click()}
                 >

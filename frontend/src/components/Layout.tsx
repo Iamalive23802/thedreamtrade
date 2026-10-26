@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Menu } from 'lucide-react';
 import Sidebar from './Sidebar';
 import ToastContainer from './ToastContainer';
 import NewLeadsAssignedModal from './modals/NewLeadsAssignedModal';
@@ -29,6 +30,7 @@ function Layout() {
   const isWhatsAppInbox = location.pathname.startsWith('/whatsapp');
   const isRM = role === 'relationship_mgr';
   const isAdmin = role === 'super_admin' || role === 'admin';
+  const [navOpen, setNavOpen] = useState(false);
 
   const [showNewLeadsModal, setShowNewLeadsModal] = useState(false);
   const [newLeadsPopupCount, setNewLeadsPopupCount] = useState(0);
@@ -148,14 +150,52 @@ function Layout() {
     };
   }, [isAuthenticated, isAdmin, userId, enqueueFreeTrialAlerts]);
 
+  useEffect(() => {
+    setNavOpen(false);
+  }, [location.pathname]);
+
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-900 text-white">
-      <div className="flex-shrink-0 w-64 h-full">
-        <Sidebar />
+    <div className="flex h-screen overflow-hidden bg-canvas text-white">
+      {navOpen && (
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-black/60 lg:hidden"
+          aria-label="Close menu"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+      <div
+        className={`fixed inset-y-0 left-0 z-40 w-64 transform transition-transform duration-150 motion-reduce:transition-none lg:static lg:translate-x-0 ${
+          navOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <Sidebar onNavigate={() => setNavOpen(false)} />
       </div>
-      <main className={isWhatsAppInbox ? 'flex-1 overflow-hidden p-0' : 'flex-1 overflow-y-auto p-6'}>
-        <Outlet />
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-3 border-b border-line bg-shell px-4 py-3 lg:hidden">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Open menu"
+            onClick={() => setNavOpen(true)}
+          >
+            <Menu size={18} />
+          </button>
+          <span className="text-sm font-semibold tracking-tight">Dream Trade</span>
+        </header>
+        <main className={isWhatsAppInbox ? 'min-h-0 flex-1 overflow-hidden' : 'flex-1 overflow-y-auto p-4 sm:p-6'}>
+          <Suspense
+            fallback={
+              <div className="flex min-h-[40vh] items-center justify-center" role="status">
+                <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                <span className="sr-only">Loading</span>
+              </div>
+            }
+          >
+            <Outlet />
+          </Suspense>
+        </main>
+      </div>
       <ToastContainer />
       {isRM && (
         <NewLeadsAssignedModal

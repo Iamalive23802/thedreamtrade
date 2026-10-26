@@ -8,16 +8,16 @@ const ToastContainer = () => {
       {toasts.map((toast) => (
         <div
           key={toast.id}
-          className={`toast flex items-center border-l-4 shadow px-4 py-2 rounded bg-gray-800 text-white ${
+          className={`toast border-l-4 bg-surface text-white ${
             toast.type === 'success'
-              ? 'border-green-500'
+              ? 'border-emerald-500'
               : toast.type === 'error'
-              ? 'border-red-500'
-              : 'border-blue-500'
+              ? 'border-danger'
+              : 'border-primary'
           }`}
         >
           <span className="flex-1">{toast.message}</span>
-          <button onClick={() => removeToast(toast.id)} className="ml-3 text-gray-400 hover:text-white">×</button>
+          <button type="button" aria-label="Dismiss notification" onClick={() => removeToast(toast.id)} className="ml-3 text-gray-400 hover:text-white">×</button>
         </div>
       ))}
     </div>

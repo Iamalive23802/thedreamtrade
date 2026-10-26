@@ -12,16 +12,16 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({ isOpen, onClose, onConfirm,
     <Modal isOpen={isOpen} onClose={onClose} title="Confirm Action">
       <p className="mb-6">{message}</p>
       <div className="flex justify-end space-x-3">
-        <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
         <button
-  className="btn btn-primary"
-  onClick={() => {
-    console.log("✅ Confirm button clicked inside ConfirmModal"); // ← THIS
-    onConfirm(); // Call the function passed from LeadModal
-  }}
->
-  Confirm
-</button>
+          type="button"
+          className="btn btn-primary"
+          onClick={() => {
+            onConfirm();
+          }}
+        >
+          Confirm
+        </button>
       </div>
     </Modal>
   );

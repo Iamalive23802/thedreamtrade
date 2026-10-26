@@ -1,6 +1,8 @@
-const crypto = require('crypto');
 const fetch = require('node-fetch');
 const db = require('../db');
+const { verifyMetaSignature } = require('../utils/metaSignature');
+const { acceptWebhookEvent } = require('../utils/webhookQueue');
+const { fetchFormName } = require('../utils/metaFormNames');
 
 const normalizePhone = (p) => (p || '').replace(/\D/g, '').trim();
 
@@ -62,26 +64,8 @@ const parseLeadFields = (fieldData, leadgenId = '') => {
   };
 };
 
-const verifySignature = (req) => {
-  const secret = process.env.FACEBOOK_APP_SECRET;
-  if (!secret) return true;
-
-  const signature = req.headers['x-hub-signature-256'];
-  if (!signature || !req.rawBody) return false;
-
-  const expected =
-    'sha256=' +
-    crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expected)
-    );
-  } catch {
-    return false;
-  }
-};
+const verifySignature = (req) =>
+  verifyMetaSignature(req, process.env.FACEBOOK_APP_SECRET);
 
 const fetchLeadFromGraph = async (leadgenId) => {
   const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
@@ -99,31 +83,6 @@ const fetchLeadFromGraph = async (leadgenId) => {
     throw new Error(data.error?.message || `Graph API error (${res.status})`);
   }
   return data;
-};
-
-const fetchFormName = async (formId) => {
-  if (!formId) return '';
-
-  try {
-    const mapped = JSON.parse(process.env.FACEBOOK_FORM_NAMES || '{}');
-    if (mapped[String(formId)]) return String(mapped[String(formId)]);
-  } catch {
-    // ignore invalid JSON map
-  }
-
-  const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
-  if (!token) return '';
-
-  const version = process.env.FACEBOOK_GRAPH_VERSION || 'v21.0';
-  const url = `https://graph.facebook.com/${version}/${formId}?fields=id,name&access_token=${encodeURIComponent(token)}`;
-  try {
-    const res = await fetch(url);
-    const data = await res.json();
-    if (res.ok && data.name) return String(data.name);
-  } catch (err) {
-    console.warn('[Facebook] Could not resolve form name:', err.message);
-  }
-  return '';
 };
 
 const notifyMetaOfNewLead = (leadRow) => {
@@ -198,7 +157,9 @@ const insertLead = async (lead, meta = {}) => {
     .filter(Boolean)
     .join(' | ');
 
-  const result = await db.query(
+  let result;
+  try {
+    result = await db.query(
     `INSERT INTO leads (
       date, full_name, email, phone, notes, tags, language, team_id, assigned_to, assigned_at,
       meta_lead_id, meta_form_id, meta_form_name, meta_source
@@ -221,6 +182,10 @@ const insertLead = async (lead, meta = {}) => {
       source,
     ]
   );
+  } catch (err) {
+    if (err.code === '23505') return { duplicate: true };
+    throw err;
+  }
 
   notifyMetaOfNewLead(result.rows[0]);
   return { duplicate: false, lead: result.rows[0] };
@@ -313,7 +278,7 @@ const verifyWebhook = (req, res) => {
   const challenge = req.query['hub.challenge'];
   const expected = process.env.FACEBOOK_VERIFY_TOKEN;
 
-  if (mode === 'subscribe' && token === expected) {
+  if (mode === 'subscribe' && token && expected && token === expected) {
     console.log('[Facebook] Webhook verified');
     return res.status(200).send(challenge);
   }
@@ -336,57 +301,52 @@ const parseWebhookBody = (req) => {
   }
 };
 
+const processRawWebhook = async (rawText) => {
+  const body = parseWebhookBody({ rawBody: Buffer.from(rawText || '', 'utf8') });
+
+  if (body?.object === 'whatsapp_business_account') {
+    const { handleWhatsAppPayload } = require('./whatsappWebhook');
+    await handleWhatsAppPayload(body);
+    return;
+  }
+
+  if (body?.object !== 'page' || !Array.isArray(body.entry)) return;
+
+  for (const entry of body.entry) {
+    for (const change of entry.changes || []) {
+      if (change.field === 'leadgen') {
+        await processLeadgen(change.value, { source: 'Instant Form' });
+      }
+      if (change.field === 'messaging_in_thread_lead_form_submit') {
+        await processMessengerFormSubmit(change.value || {});
+      }
+    }
+
+    for (const event of entry.messaging || []) {
+      if (!event?.form && !event?.leadgen_id) continue;
+      await processMessengerFormSubmit(event);
+    }
+  }
+};
+
 const handleWebhookEvent = async (req, res) => {
   if (!verifySignature(req)) {
     console.warn('[Facebook] Invalid signature');
     return res.sendStatus(403);
   }
 
-  const body = parseWebhookBody(req);
-
-  // Shared callback URL: WhatsApp CTWA payloads may arrive here.
-  if (body?.object === 'whatsapp_business_account') {
-    res.sendStatus(200);
-    try {
-      const { handleWhatsAppPayload } = require('./whatsappWebhook');
-      handleWhatsAppPayload(body).catch((err) => {
-        console.error('[Facebook→WhatsApp] CTWA handling failed:', err.message);
-      });
-    } catch (err) {
-      console.error('[Facebook→WhatsApp] CTWA handler load failed:', err.message);
-    }
-    return;
-  }
-
-  if (body?.object !== 'page' || !Array.isArray(body.entry)) {
+  const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+  try {
+    await acceptWebhookEvent({
+      source: 'facebook',
+      rawBody,
+      handler: processRawWebhook,
+    });
     return res.sendStatus(200);
-  }
-
-  res.sendStatus(200);
-
-  for (const entry of body.entry) {
-    for (const change of entry.changes || []) {
-      if (change.field === 'leadgen') {
-        processLeadgen(change.value, { source: 'Instant Form' }).catch((err) => {
-          console.error('[Facebook] Failed to process lead:', err.message);
-        });
-      }
-      // Some payloads deliver Messenger form submits as a Page change field.
-      if (change.field === 'messaging_in_thread_lead_form_submit') {
-        processMessengerFormSubmit(change.value || {}).catch((err) => {
-          console.error('[Facebook] Failed Messenger form lead:', err.message);
-        });
-      }
-    }
-
-    // Messenger in-thread Instant Form submissions arrive under entry.messaging
-    for (const event of entry.messaging || []) {
-      if (!event?.form && !event?.leadgen_id) continue;
-      processMessengerFormSubmit(event).catch((err) => {
-        console.error('[Facebook] Failed Messenger form lead:', err.message);
-      });
-    }
+  } catch (err) {
+    console.error('[Facebook] Webhook processing failed:', err.message);
+    return res.sendStatus(500);
   }
 };
 
-module.exports = { verifyWebhook, handleWebhookEvent };
+module.exports = { verifyWebhook, handleWebhookEvent, processRawWebhook };

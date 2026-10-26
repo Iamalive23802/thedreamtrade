@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Pencil, Trash2, Plus, Upload, UserPlus2, Copy, ChevronDown, ChevronRight, FileSpreadsheet } from 'lucide-react';
+import { Pencil, Trash2, Plus, Upload, UserPlus2, Copy, ChevronDown, ChevronRight, FileSpreadsheet, Info } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { useLeadStore } from '../stores/leadStore';
 import { useTeamStore } from '../stores/teamStore';
@@ -16,10 +16,37 @@ import moment from 'moment';
 import axiosInstance from '../utils/axiosConfig';
 import LiveMarketTickers from '../components/LiveMarketTickers';
 import * as XLSX from 'xlsx';
-import { parseLeadNotes } from '../utils/notes';
+import { filterLeadNotesForViewer, parseLeadNotes } from '../utils/notes';
+import PageHeader from '../components/PageHeader';
+
+const formNameForLead = (lead: Lead) => {
+  const stored = (lead.metaFormName || '').trim();
+  if (stored) return stored;
+  const match = (lead.notes || '').match(/Form Name:\s*([^|]+)/i);
+  return match?.[1]?.trim() || '';
+};
+
+const formatLeadTime = (lead: Lead, useAssignedTime: boolean) => {
+  const candidates = useAssignedTime
+    ? [lead.assignedAt, lead.date]
+    : [lead.date, lead.assignedAt];
+
+  for (const value of candidates) {
+    const parsed = value ? moment(value) : null;
+    if (parsed?.isValid()) return parsed.format('hh:mm A');
+  }
+
+  const notes = parseLeadNotes(lead.notes || '');
+  for (let i = notes.length - 1; i >= 0; i--) {
+    const parsed = moment(notes[i].timestamp);
+    if (parsed.isValid()) return parsed.format('hh:mm A');
+  }
+
+  return '—';
+};
 
 function LeadsPage() {
-  const { role, userId } = useAuthStore();
+  const { role, userId, displayName } = useAuthStore();
   const isSuperAdmin = role === 'super_admin';
   const isAdmin = role === 'admin';
   const isTeamLeader = role === 'team_leader';
@@ -440,8 +467,10 @@ function LeadsPage() {
         return {
         ID: lead.id,
         Date: lead.date ? moment(lead.date).format('YYYY-MM-DD') : '',
+        Time: formatLeadTime(lead, false),
         'Full Name': lead.fullName || '',
         Phone: lead.phone || '',
+        ...(isSuperAdmin ? { 'Form Name': formNameForLead(lead) } : {}),
         Email: lead.email || '',
         'Alt Number': lead.altNumber || '',
         Status: lead.status || '',
@@ -505,41 +534,38 @@ function LeadsPage() {
   ).sort();
 
   return (
-    <div className="container mx-auto px-4" onMouseUp={handleMouseUp}>
+    <div onMouseUp={handleMouseUp}>
       <LiveMarketTickers />
-      <div className="flex justify-between items-center mb-6">
-  <h1 className="text-2xl font-bold">All Leads</h1>
-  {(role === 'super_admin' || role === 'admin' || role === 'relationship_mgr' || role === 'financial_manager') && (
-    <div className="flex space-x-3">
-      <button
-        className="btn btn-primary flex items-center"
-        onClick={handleAddLead}
-      >
-        <Plus size={18} className="mr-1" />
-        Add Lead
-      </button>
-      {(role === 'super_admin' || role === 'admin') && (
-        <button
-          className="btn btn-primary flex items-center"
-          onClick={() => setIsUploadModalOpen(true)}
-        >
-          <Upload size={18} className="mr-1" />
-          Upload Leads
-        </button>
-      )}
-    </div>
-  )}
-</div>
+      <PageHeader
+        title="Leads"
+        description={`${totalFiltered.toLocaleString('en-IN')} in the current view`}
+        actions={
+          (role === 'super_admin' || role === 'admin' || role === 'relationship_mgr' || role === 'financial_manager') ? (
+            <>
+              <button type="button" className="btn btn-primary" onClick={handleAddLead}>
+                <Plus size={16} />
+                Add Lead
+              </button>
+              {(role === 'super_admin' || role === 'admin') && (
+                <button type="button" className="btn btn-secondary" onClick={() => setIsUploadModalOpen(true)}>
+                  <Upload size={16} />
+                  Upload Leads
+                </button>
+              )}
+            </>
+          ) : null
+        }
+      />
 
       {/* Filters */}
       {(isSuperAdmin || isAdmin || isTeamLeader) && (
         <div className="mb-6 space-y-2">
           {/* Assign Leads Section - Collapsible */}
           {(isSuperAdmin || isAdmin) && (
-            <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+            <div className="overflow-hidden rounded-xl border border-line bg-surface">
               <button
                 onClick={() => setShowAssignSection(!showAssignSection)}
-                className="w-full flex items-center justify-between p-4 hover:bg-gray-750 transition-colors"
+                className="w-full flex items-center justify-between p-4 hover:bg-surface-hover transition-colors"
               >
                 <div className="flex items-center gap-2">
                   {showAssignSection ? (
@@ -605,7 +631,7 @@ function LeadsPage() {
                         Assign Leads
                       </button>
                       <button
-                        className="btn bg-red-600 hover:bg-red-700 text-white flex items-center px-3 py-2 text-xs"
+                        className="btn btn-danger px-3 py-2 text-xs"
                         onClick={handleBulkDelete}
                         disabled={selectedLeads.length === 0}
                       >
@@ -613,7 +639,7 @@ function LeadsPage() {
                         Delete {selectedLeads.length > 0 ? `${selectedLeads.length} ` : ''}Leads
                       </button>
                       <button
-                        className="btn bg-emerald-600 hover:bg-emerald-700 text-white flex items-center px-3 py-2 text-xs"
+                        className="btn btn-success px-3 py-2 text-xs"
                         onClick={handleExportToExcel}
                         disabled={filteredLeads.length === 0}
                       >
@@ -628,10 +654,10 @@ function LeadsPage() {
           )}
 
           {/* Filters Section - Collapsible */}
-          <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+          <div className="overflow-hidden rounded-xl border border-line bg-surface">
             <button
               onClick={() => setShowFiltersSection(!showFiltersSection)}
-              className="w-full flex items-center justify-between p-4 hover:bg-gray-750 transition-colors"
+              className="w-full flex items-center justify-between p-4 hover:bg-surface-hover transition-colors"
             >
               <div className="flex items-center gap-2">
                 {showFiltersSection ? (
@@ -705,10 +731,10 @@ function LeadsPage() {
         </div>
       )}
 
-      <div className="bg-gray-800 rounded-lg overflow-hidden">
-        <div className="max-h-[80vh] overflow-y-auto">
-          <table className="w-full text-sm text-left text-gray-300">
-            <thead className="bg-gray-700 text-gray-400 uppercase text-xs sticky top-0">
+      <div className="table-panel">
+        <div className="max-h-[80vh] overflow-auto">
+          <table className="w-full text-left text-sm text-gray-300">
+            <thead className="sticky top-0 bg-shell text-xs uppercase text-gray-400">
               <tr>
                 <th className="w-10 p-2">
                   <input
@@ -726,10 +752,14 @@ function LeadsPage() {
                   />
                 </th>
                 {isRM ? (
-                  <th className="w-28 p-2 text-xs">Assigned Date</th>
+                  <>
+                    <th className="w-28 p-2 text-xs">Assigned Date</th>
+                    <th className="p-2 text-xs">Time</th>
+                  </>
                 ) : (
                   <>
                     <th className="w-28 p-2 text-xs">Date</th>
+                    <th className="p-2 text-xs">Time</th>
                     {isTeamLeader && <th className="w-28 p-2 text-xs">Assigned Date</th>}
                   </>
                 )}
@@ -803,6 +833,7 @@ function LeadsPage() {
                     )}
                   </div>
                 </th>
+                {isSuperAdmin && <th className="w-40 p-2 text-xs">Form Name</th>}
 
                 {(role === 'super_admin' || role === 'admin') ? (
                   <>
@@ -943,9 +974,16 @@ function LeadsPage() {
                 <th className="w-32 p-3">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-700">
+            <tbody className="divide-y divide-line">
+              {paginatedLeads.length === 0 && (
+                <tr>
+                  <td colSpan={20} className="px-4 py-10 text-center text-sm text-gray-400">
+                    No leads match the current filters.
+                  </td>
+                </tr>
+              )}
               {paginatedLeads.map((lead) => (
-                <tr key={lead.id} className="hover:bg-gray-700 transition">
+                <tr key={lead.id} className="transition-colors hover:bg-surface-hover">
                   <td className="p-2">
                     <input
                       type="checkbox"
@@ -957,13 +995,21 @@ function LeadsPage() {
                     />
                   </td>
                   {isRM ? (
-                    <td className="p-2 text-xs">
-                      {lead.assignedAt ? moment(lead.assignedAt).format('DD MMM YYYY') : '—'}
-                    </td>
+                    <>
+                      <td className="p-2 text-xs">
+                        {lead.assignedAt ? moment(lead.assignedAt).format('DD MMM YYYY') : '—'}
+                      </td>
+                      <td className="p-2 text-xs">
+                        {formatLeadTime(lead, true)}
+                      </td>
+                    </>
                   ) : (
                     <>
                       <td className="p-2 text-xs">
                         {lead.date ? moment(lead.date).format('DD MMM YYYY') : '—'}
+                      </td>
+                      <td className="p-2 text-xs">
+                        {formatLeadTime(lead, false)}
                       </td>
                       {isTeamLeader && (
                         <td className="p-2 text-xs">
@@ -991,6 +1037,11 @@ function LeadsPage() {
                       <Copy size={14} />
                     </button>
                   </td>
+                  {isSuperAdmin && (
+                    <td className="p-2 truncate text-xs" title={formNameForLead(lead) || undefined}>
+                      {formNameForLead(lead) || '—'}
+                    </td>
+                  )}
                   {(role === 'super_admin' || role === 'admin') ? (
                     <td className="p-2 truncate text-xs">{getAssignedUserName(lead.assigned_to)}</td>
                   ) : role === 'team_leader' ? (
@@ -1022,23 +1073,29 @@ function LeadsPage() {
                   )}
                   <td className="p-2 flex gap-2">
                     <button
+                      type="button"
                       onClick={() => setInfoLead(lead)}
-                      className="text-blue-400 hover:text-blue-300"
+                      className="icon-btn text-sky-300"
+                      aria-label={`View ${lead.fullName || 'lead'}`}
                       title="View Info"
                     >
-                      ℹ️
+                      <Info size={16} />
                     </button>
                     <button
+                      type="button"
+                      aria-label={`Edit ${lead.fullName || 'lead'}`}
                       onClick={() => handleEditLead(lead)}
-                      className="text-blue-400 hover:text-blue-300"
+                      className="icon-btn text-sky-300"
                     >
                       <Pencil size={16} />
                     </button>
       {(isSuperAdmin || isAdmin) && (
                       <>
                         <button
+                          type="button"
+                          aria-label={`Delete ${lead.fullName || 'lead'}`}
                           onClick={() => handleDeleteLead(lead.id)}
-                          className="text-red-400 hover:text-red-300"
+                          className="icon-btn icon-btn-danger"
                         >
                           <Trash2 size={16} />
                         </button>
@@ -1265,7 +1322,14 @@ function LeadsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-700/80">
-                      {parseLeadNotes(infoLead.notes).map((note, index) => {
+                      {filterLeadNotesForViewer(infoLead.notes, {
+                        role,
+                        viewerRmName: displayName || '',
+                        assignedRmName:
+                          users.find((u) => u.id === infoLead.assigned_to)?.display_name ||
+                          infoLead.assigned_user_name ||
+                          '',
+                      }).map((note, index) => {
                         const dateObj = moment(note.timestamp);
                         return (
                           <tr key={index} className="hover:bg-gray-900/40">

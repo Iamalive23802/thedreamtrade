@@ -3,6 +3,11 @@ const cors = require('cors');
 const compression = require('compression');
 const helmet = require('helmet');
 const { authenticateToken } = require('./middleware/auth');
+const { encryptResponse } = require('./middleware/encryptResponse');
+const { requireMetaAppSecrets } = require('./utils/metaSignature');
+const { ensureWebhookEventsTable, startWebhookRecovery } = require('./utils/webhookQueue');
+
+requireMetaAppSecrets();
 
 const userRoutes = require('./routes/users');
 const teamRoutes = require('./routes/teams');
@@ -18,9 +23,12 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',');
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 app.use(cors({
-  origin: allowedOrigins,
+  origin: allowedOrigins.length > 0 ? allowedOrigins : true,
   credentials: true
 }));
 app.use(compression());
@@ -38,6 +46,7 @@ app.use(
     },
   })
 );
+app.use(encryptResponse);
 
 app.use((req, res, next) => {
   console.log(`[INCOMING] ${req.method} ${req.originalUrl}`);
@@ -73,6 +82,41 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: 'Internal Server Error' });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
-});
+ensureWebhookEventsTable()
+  .then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
+    });
+    startWebhookRecovery();
+  })
+  .catch((err) => {
+    console.error('Failed to prepare webhook queue:', err.message);
+    process.exit(1);
+  });
+
+const ENABLE_AUTO_REASSIGN_CRON = process.env.ENABLE_AUTO_REASSIGN_CRON !== 'false';
+if (ENABLE_AUTO_REASSIGN_CRON) {
+  const { processTwentyFourHourReassignments } = require('./utils/autoReassign');
+  const INTERVAL_MS = Number(process.env.AUTO_REASSIGN_INTERVAL_MS || 5 * 60 * 1000);
+  let running = false;
+
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const results = await processTwentyFourHourReassignments(require('./db'));
+      const reassigned = results.filter((r) => r.ok).length;
+      if (results.length > 0) {
+        console.log(`[24h-reassign] tick scanned=${results.length} reassigned=${reassigned}`);
+      }
+    } catch (err) {
+      console.error('[24h-reassign] tick failed:', err.message);
+    } finally {
+      running = false;
+    }
+  };
+
+  setTimeout(tick, 15_000);
+  setInterval(tick, INTERVAL_MS);
+  console.log(`⏱️  24h auto-reassignment scheduler enabled (interval ${INTERVAL_MS}ms)`);
+}

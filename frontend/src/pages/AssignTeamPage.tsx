@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
 import { useUserStore } from '../stores/userStore';
 import { useTeamStore } from '../stores/teamStore';
+import PageHeader from '../components/PageHeader';
 
 function AssignTeamPage() {
   const { users, updateUser, fetchUsers, loading } = useUserStore();
-  const { teams } = useTeamStore();
+  const { teams, fetchTeams } = useTeamStore();
   const [selectedTeam, setSelectedTeam] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
     (async () => {
       try {
-        await fetchUsers();
+        await Promise.all([fetchUsers(), fetchTeams()]);
       } catch (err) {
         console.error('Failed to fetch users:', err);
       }
@@ -43,10 +44,13 @@ function AssignTeamPage() {
   );
 
   return (
-    <div className="container mx-auto">
+    <div>
+      <PageHeader
+        title="Assign Team"
+        description="Choose a team, then assign it to a user."
+      />
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-4">Assign Team</h1>
-        <div className="bg-gray-800 p-4 rounded-lg">
+        <div className="rounded-xl border border-line bg-surface p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="team-select" className="form-label">Select Team</label>
@@ -77,7 +81,7 @@ function AssignTeamPage() {
         </div>
       </div>
 
-      <div className="bg-gray-800 rounded-lg overflow-hidden">
+      <div className="table-panel">
         <div className="table-container">
           {loading ? (
             <div className="text-center text-gray-400 p-6">Loading users...</div>
@@ -85,7 +89,7 @@ function AssignTeamPage() {
             <div className="text-center text-gray-400 p-6">No users found.</div>
           ) : (
             <table className="data-table">
-              <thead className="bg-gray-700">
+              <thead className="bg-shell">
                 <tr>
                   <th>Name</th>
                   <th>Email</th>
@@ -94,7 +98,7 @@ function AssignTeamPage() {
                   <th>Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-700">
+              <tbody>
                 {filteredUsers.map((user) => {
                   const userTeam = teams.find(team => team.id === user.team_id);
                   return (

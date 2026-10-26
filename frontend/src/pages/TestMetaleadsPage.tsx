@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw, FlaskConical } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { useLeadStore } from '../stores/leadStore';
+import PageHeader from '../components/PageHeader';
 
 const FORM_NAME_FALLBACK: Record<string, string> = {
   '1039451381794500': 'MH - JULY 17 - FORM',
@@ -96,26 +97,17 @@ function TestMetaleadsPage() {
   }, [leads]);
 
   return (
-    <div className="container mx-auto">
-      <div className="flex justify-between items-center mb-6">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FlaskConical size={22} />
-            TestMetaleads
-          </h1>
-          <p className="text-sm text-gray-400 mt-1">
-            Facebook Instant Form, Messenger, and CTWA (Click-to-WhatsApp) leads
-          </p>
-        </div>
-        <button
-          className="btn btn-primary flex items-center"
-          onClick={load}
-          disabled={loading}
-        >
-          <RefreshCw size={18} className={`mr-1 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
-      </div>
+    <div>
+      <PageHeader
+        title="TestMetaleads"
+        description="Facebook Instant Form, Messenger, and CTWA (Click-to-WhatsApp) leads"
+        actions={
+          <button type="button" className="btn btn-primary" onClick={load} disabled={loading}>
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        }
+      />
 
       {lastRefreshed && (
         <p className="text-sm text-gray-500 mb-4">
@@ -123,10 +115,10 @@ function TestMetaleadsPage() {
         </p>
       )}
 
-      <div className="bg-gray-800 rounded-lg overflow-hidden">
+      <div className="table-panel">
         <div className="table-container max-h-[70vh] overflow-y-auto">
           <table className="data-table">
-            <thead className="bg-gray-900 sticky top-0">
+            <thead className="sticky top-0 bg-shell">
               <tr>
                 <th>Date</th>
                 <th>Name</th>
@@ -141,7 +133,7 @@ function TestMetaleadsPage() {
                 <th>Notes</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-700">
+            <tbody>
               {loading && metaLeads.length === 0 ? (
                 <tr>
                   <td colSpan={11} className="text-center text-gray-400 py-8">

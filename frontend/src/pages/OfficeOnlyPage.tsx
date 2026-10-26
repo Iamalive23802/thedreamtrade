@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { checkNetworkAccess } from '../utils/networkAccess';
+import { homePathForRole } from '../utils/homePath';
 
 function OfficeOnlyPage() {
   const [checking, setChecking] = useState(false);
@@ -12,7 +13,7 @@ function OfficeOnlyPage() {
       const { allowed } = await checkNetworkAccess();
       if (allowed) {
         const isAuthenticated = sessionStorage.getItem('isAuthenticated') === 'true';
-        navigate(isAuthenticated ? '/' : '/login', { replace: true });
+        navigate(isAuthenticated ? homePathForRole(sessionStorage.getItem('role')) : '/login', { replace: true });
         window.location.reload();
       }
     } finally {
@@ -21,8 +22,8 @@ function OfficeOnlyPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900 px-6">
-      <div className="bg-gray-800 p-8 rounded-lg shadow-lg w-full max-w-lg text-center">
+    <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
+      <div className="w-full max-w-lg rounded-xl border border-line bg-surface p-8 text-center shadow-xl">
         <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-amber-500/15">
           <svg
             className="h-8 w-8 text-amber-400"
@@ -40,7 +41,7 @@ function OfficeOnlyPage() {
           </svg>
         </div>
 
-        <h1 className="text-2xl font-bold text-white mb-3">Office Connection Required</h1>
+        <h1 className="mb-3 text-2xl font-semibold tracking-tight text-white">Office Connection Required</h1>
         <p className="text-gray-300 mb-2">
           Login is allowed only from authorized office connections.
         </p>

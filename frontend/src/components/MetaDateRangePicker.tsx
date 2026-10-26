@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import moment, { type Moment } from 'moment';
 
-export type DatePreset = 'daily' | 'weekly' | 'monthly' | 'custom';
+export type DatePreset = 'daily' | 'weekly' | 'monthly' | 'all' | 'custom';
 
 type MetaDateRangePickerProps = {
   preset: DatePreset;
@@ -15,6 +15,7 @@ const PRESETS: { key: DatePreset; label: string; hint: string }[] = [
   { key: 'daily', label: 'Today', hint: 'Daily' },
   { key: 'weekly', label: 'Last 7 days', hint: 'Weekly' },
   { key: 'monthly', label: 'Last 30 days', hint: 'Monthly' },
+  { key: 'all', label: 'All time', hint: 'Maximum' },
   { key: 'custom', label: 'Custom', hint: 'Pick range' },
 ];
 
@@ -28,6 +29,9 @@ function rangeForPreset(preset: DatePreset, from?: string, to?: string) {
   }
   if (preset === 'monthly') {
     return { from: moment().subtract(29, 'days').startOf('day'), to: end };
+  }
+  if (preset === 'all') {
+    return { from: moment('2000-01-01').startOf('day'), to: end };
   }
   const start = moment(from || undefined).startOf('day');
   const finish = moment(to || undefined).endOf('day');
@@ -105,6 +109,7 @@ export default function MetaDateRangePicker({
   const nextMonthDays = useMemo(() => buildMonthMatrix(nextMonth), [nextMonth]);
 
   const triggerLabel = useMemo(() => {
+    if (preset === 'all') return 'All time';
     const start = appliedRange.from.format('MMM D, YYYY');
     const end = appliedRange.to.format('MMM D, YYYY');
     if (preset === 'daily') return `Today: ${end}`;
@@ -256,7 +261,7 @@ export default function MetaDateRangePicker({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-2 rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-750 px-3 py-2 text-sm text-white shadow-sm"
+        className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 text-sm text-white shadow-sm transition-colors hover:bg-surface-hover"
       >
         <CalendarDays size={16} className="text-gray-300" />
         <span>{triggerLabel}</span>
@@ -296,9 +301,11 @@ export default function MetaDateRangePicker({
 
               <div className="mt-4 pt-3 border-t border-gray-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <p className="text-xs text-gray-400">
-                  {draftPreset === 'custom' && pickingEnd
-                    ? 'Select end date'
-                    : `${draftRange.from.format('MMM D, YYYY')} – ${draftRange.to.format('MMM D, YYYY')}`}
+                  {draftPreset === 'all'
+                    ? 'All payments · no date limit'
+                    : draftPreset === 'custom' && pickingEnd
+                      ? 'Select end date'
+                      : `${draftRange.from.format('MMM D, YYYY')} – ${draftRange.to.format('MMM D, YYYY')}`}
                 </p>
                 <div className="flex items-center gap-2 justify-end">
                   <button

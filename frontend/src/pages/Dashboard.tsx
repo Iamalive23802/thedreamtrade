@@ -18,6 +18,7 @@ import { useLeadStore } from '../stores/leadStore';
 import { useTeamStore } from '../stores/teamStore';
 import { parsePaymentHistory } from '../utils/payment';
 import MetaDateRangePicker, { type DatePreset } from '../components/MetaDateRangePicker';
+import PageHeader from '../components/PageHeader';
 
 const PAID = new Set(['Paid Client', 'Won']);
 const FREE_TRIAL = new Set(['Free Trial', 'Free Trial – Follow Up']);
@@ -109,6 +110,9 @@ const Dashboard = () => {
     }
     if (datePreset === 'monthly') {
       return { from: moment().subtract(29, 'days').startOf('day'), to: today };
+    }
+    if (datePreset === 'all') {
+      return { from: moment('2000-01-01').startOf('day'), to: today };
     }
     const from = moment(customFrom || undefined).startOf('day');
     const to = moment(customTo || undefined).endOf('day');
@@ -348,31 +352,29 @@ const Dashboard = () => {
     if (datePreset === 'daily') return `Today · ${toLabel}`;
     if (datePreset === 'weekly') return `Last 7 days · ${fromLabel} – ${toLabel}`;
     if (datePreset === 'monthly') return `Last 30 days · ${fromLabel} – ${toLabel}`;
+    if (datePreset === 'all') return 'All time';
     return `Custom · ${fromLabel} – ${toLabel}`;
   }, [datePreset, dateRange]);
 
   return (
-    <div className="min-h-screen text-white px-4 sm:px-6 py-8">
-      <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4 mb-8">
-        <div>
-          <p className="text-xs uppercase tracking-[0.2em] text-emerald-400/80 mb-2">
-            Growth intelligence
-          </p>
-          <h1 className="text-3xl font-bold tracking-tight">Ads &amp; Lead Performance</h1>
-          <p className="text-gray-400 mt-2 text-sm">{periodLabel}</p>
-        </div>
-
-        <MetaDateRangePicker
-          preset={datePreset}
-          from={customFrom}
-          to={customTo}
-          onChange={({ preset, from, to }) => {
-            setDatePreset(preset);
-            setCustomFrom(from);
-            setCustomTo(to);
-          }}
-        />
-      </div>
+    <div>
+      <PageHeader
+        eyebrow="Growth intelligence"
+        title="Ads & Lead Performance"
+        description={periodLabel}
+        actions={
+          <MetaDateRangePicker
+            preset={datePreset}
+            from={customFrom}
+            to={customTo}
+            onChange={({ preset, from, to }) => {
+              setDatePreset(preset);
+              setCustomFrom(from);
+              setCustomTo(to);
+            }}
+          />
+        }
+      />
 
       {/* KPI strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-8">
@@ -415,7 +417,7 @@ const Dashboard = () => {
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-8">
         {/* Funnel */}
-        <section className="xl:col-span-1 bg-gray-800/80 border border-gray-700 rounded-2xl p-5">
+        <section className="xl:col-span-1 bg-surface/80 border border-line rounded-xl p-5">
           <div className="flex items-center gap-2 mb-5">
             <Target size={18} className="text-emerald-400" />
             <h2 className="font-semibold">Conversion funnel</h2>
@@ -429,9 +431,9 @@ const Dashboard = () => {
                   </span>
                   <span className="font-semibold">{stage.count.toLocaleString('en-IN')}</span>
                 </div>
-                <div className="h-2.5 bg-gray-900 rounded-full overflow-hidden">
+                <div className="h-2.5 bg-shell rounded-full overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-400"
+                    className="h-full rounded-full bg-emerald-500"
                     style={{ width: `${stage.width}%` }}
                   />
                 </div>
@@ -439,7 +441,7 @@ const Dashboard = () => {
               </div>
             ))}
           </div>
-          <div className="mt-5 pt-4 border-t border-gray-700 grid grid-cols-2 gap-3 text-xs">
+          <div className="mt-5 pt-4 border-t border-line grid grid-cols-2 gap-3 text-xs">
             <Link to="/leads?status=Free Trial" className="text-sky-400 hover:underline">
               Open free trials →
             </Link>
@@ -450,7 +452,7 @@ const Dashboard = () => {
         </section>
 
         {/* Channel table */}
-        <section className="xl:col-span-2 bg-gray-800/80 border border-gray-700 rounded-2xl p-5">
+        <section className="xl:col-span-2 bg-surface/80 border border-line rounded-xl p-5">
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-2">
               <Megaphone size={18} className="text-sky-400" />
@@ -461,7 +463,7 @@ const Dashboard = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-gray-500 border-b border-gray-700">
+                <tr className="text-left text-xs uppercase tracking-wide text-gray-500 border-b border-line">
                   <th className="pb-3 pr-3">Channel</th>
                   <th className="pb-3 pr-3">Leads</th>
                   <th className="pb-3 pr-3">FT %</th>
@@ -470,9 +472,9 @@ const Dashboard = () => {
                   <th className="pb-3">Waste %</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-700/80">
+              <tbody className="divide-y divide-line/80">
                 {channels.slice(0, 8).map((ch) => (
-                  <tr key={ch.name} className="hover:bg-gray-750/40">
+                  <tr key={ch.name} className="hover:bg-surface-hover">
                     <td className="py-3 pr-3 font-medium">{ch.name}</td>
                     <td className="py-3 pr-3">{ch.leads.toLocaleString('en-IN')}</td>
                     <td className="py-3 pr-3 text-sky-300">{ch.ftRate}%</td>
@@ -506,21 +508,21 @@ const Dashboard = () => {
         </section>
       </div>
 
-      <section className="bg-gray-800/80 border border-gray-700 rounded-2xl p-5 mb-8">
+      <section className="bg-surface/80 border border-line rounded-xl p-5 mb-8">
         <div className="flex items-center gap-2 mb-5">
           <AlertTriangle size={18} className="text-rose-400" />
           <h2 className="font-semibold">Lead quality leaks</h2>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
           {qualityBreakdown.map((q) => (
-            <div key={q.label} className="rounded-xl bg-gray-900/60 border border-gray-700/70 px-3 py-3">
+            <div key={q.label} className="rounded-xl bg-shell/60 border border-line/70 px-3 py-3">
               <div className="flex justify-between text-sm mb-1 gap-2">
                 <span className="text-gray-300">{q.label}</span>
                 <span className="shrink-0">
                   {q.count.toLocaleString('en-IN')} · {q.rate}%
                 </span>
               </div>
-              <div className="h-2 bg-gray-900 rounded-full overflow-hidden mb-1">
+              <div className="h-2 bg-shell rounded-full overflow-hidden mb-1">
                 <div
                   className={`h-full rounded-full ${
                     q.tone === 'rose'
@@ -543,7 +545,7 @@ const Dashboard = () => {
       </section>
 
       {/* Weekly trend */}
-      <section className="bg-gray-800/80 border border-gray-700 rounded-2xl p-5 mb-8">
+      <section className="bg-surface/80 border border-line rounded-xl p-5 mb-8">
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
             <TrendingUp size={18} className="text-teal-400" />
@@ -574,7 +576,7 @@ const Dashboard = () => {
       {/* Ops section retained */}
       {isOpsLeader && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <section className="bg-gray-800/80 border border-gray-700 rounded-2xl p-5">
+          <section className="bg-surface/80 border border-line rounded-xl p-5">
             <h2 className="font-semibold mb-4">Top teams (paid)</h2>
             <div className="space-y-4">
               {topTeams.map((team) => (
@@ -583,7 +585,7 @@ const Dashboard = () => {
                     <span>{team.name}</span>
                     <span className="text-gray-400">{team.clients} clients</span>
                   </div>
-                  <div className="w-full bg-gray-900 h-2 rounded-full overflow-hidden">
+                  <div className="w-full bg-shell h-2 rounded-full overflow-hidden">
                     <div
                       className="h-2 bg-sky-500 rounded-full"
                       style={{ width: `${team.percent}%` }}
@@ -594,7 +596,7 @@ const Dashboard = () => {
             </div>
           </section>
 
-          <section className="bg-gray-800/80 border border-gray-700 rounded-2xl p-5">
+          <section className="bg-surface/80 border border-line rounded-xl p-5">
             <h2 className="font-semibold mb-4">RM sales ({periodLabel})</h2>
             <ul className="space-y-3 max-h-56 overflow-y-auto text-sm">
               {rmSales.slice(0, 12).map((rm) => (
@@ -606,7 +608,7 @@ const Dashboard = () => {
             </ul>
           </section>
 
-          <section className="bg-gray-800/80 border border-gray-700 rounded-2xl p-5">
+          <section className="bg-surface/80 border border-line rounded-xl p-5">
             <h2 className="font-semibold mb-4">RM free trials ({periodLabel})</h2>
             <ul className="space-y-3 max-h-56 overflow-y-auto text-sm">
               {[...rmSales]
@@ -647,12 +649,12 @@ function KpiCard({
     rose: 'border-rose-500/30 text-rose-300',
   };
   return (
-    <div className={`rounded-2xl bg-gray-800/80 border ${accents[accent]} p-4`}>
+    <div className={`rounded-xl bg-surface/80 border ${accents[accent]} p-4`}>
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs uppercase tracking-wide text-gray-400">{title}</p>
         <span className="opacity-80">{icon}</span>
       </div>
-      <p className="text-2xl font-bold text-white">{value}</p>
+      <p className="text-2xl font-semibold tracking-tight text-white">{value}</p>
       <p className="text-xs text-gray-500 mt-1">{sub}</p>
     </div>
   );

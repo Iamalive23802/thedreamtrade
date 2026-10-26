@@ -1,5 +1,6 @@
-const crypto = require('crypto');
 const db = require('../db');
+const { verifyMetaSignature } = require('../utils/metaSignature');
+const { acceptWebhookEvent } = require('../utils/webhookQueue');
 
 const normalizePhone = (p) => (p || '').replace(/\D/g, '').trim();
 
@@ -15,27 +16,8 @@ const initialNewNotes = (at) => {
   return `New____${date}__—`;
 };
 
-const verifySignature = (req) => {
-  const secret =
-    process.env.WHATSAPP_APP_SECRET || process.env.FACEBOOK_APP_SECRET;
-  if (!secret) return true;
-
-  const signature = req.headers['x-hub-signature-256'];
-  if (!signature || !req.rawBody) return false;
-
-  const expected =
-    'sha256=' +
-    crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expected)
-    );
-  } catch {
-    return false;
-  }
-};
+const verifySignature = (req) =>
+  verifyMetaSignature(req, process.env.WHATSAPP_APP_SECRET);
 
 const notifyMetaOfNewCtwaLead = (leadRow) => {
   try {
@@ -71,9 +53,9 @@ const persistInboxMessage = async ({ message, waId, phone, contactName, leadId }
     const { persistInboundMessage } = require('../utils/whatsappInbox');
     await persistInboundMessage({ message, waId, phone, contactName, leadId });
   } catch (err) {
-    if (err.code !== 'MODULE_NOT_FOUND') {
-      console.error('[WhatsApp] Inbox persist failed:', err.message);
-    }
+    if (err.code === 'MODULE_NOT_FOUND') return;
+    console.error('[WhatsApp] Inbox persist failed:', err.message);
+    throw err;
   }
 };
 
@@ -86,12 +68,13 @@ const processStatusUpdates = async (statuses) => {
         await persistStatusUpdate(status);
       } catch (err) {
         console.error('[WhatsApp] Status persist failed:', err.message);
+        throw err;
       }
     }
   } catch (err) {
-    if (err.code !== 'MODULE_NOT_FOUND') {
-      console.error('[WhatsApp] Status persist failed:', err.message);
-    }
+    if (err.code === 'MODULE_NOT_FOUND') return;
+    console.error('[WhatsApp] Status persist failed:', err.message);
+    throw err;
   }
 };
 
@@ -163,7 +146,9 @@ const upsertCtwaLead = async ({
   }
 
   const leadDate = parseMessageTimestamp(messageTimestamp);
-  const result = await db.query(
+  let result;
+  try {
+    result = await db.query(
     `INSERT INTO leads (
       date, full_name, email, phone, notes, tags, language, team_id, assigned_to, assigned_at,
       meta_source, ctwa_clid, meta_ad_id, wa_id, status
@@ -187,6 +172,10 @@ const upsertCtwaLead = async ({
       'New',
     ]
   );
+  } catch (err) {
+    if (err.code === '23505') return { duplicate: true, reason: 'ctwa_clid' };
+    throw err;
+  }
 
   notifyMetaOfNewCtwaLead(result.rows[0]);
   return { duplicate: false, attached: false, lead: result.rows[0], wabaId };
@@ -244,7 +233,9 @@ const upsertWhatsAppLead = async ({
   }
 
   const leadDate = parseMessageTimestamp(messageTimestamp);
-  const result = await db.query(
+  let result;
+  try {
+    result = await db.query(
     `INSERT INTO leads (
       date, full_name, email, phone, notes, tags, language, team_id, assigned_to, assigned_at,
       meta_source, wa_id, status
@@ -266,6 +257,10 @@ const upsertWhatsAppLead = async ({
       'New',
     ]
   );
+  } catch (err) {
+    if (err.code === '23505') return { duplicate: true };
+    throw err;
+  }
 
   return { duplicate: false, attached: false, lead: result.rows[0] };
 };
@@ -359,6 +354,7 @@ const processInboundMessage = async (value) => {
         }
       } catch (err) {
         console.error('[WhatsApp] Failed to upsert CTWA lead:', err.message);
+        throw err;
       }
     } else {
       try {
@@ -368,7 +364,9 @@ const processInboundMessage = async (value) => {
           waId,
           messageTimestamp: message.timestamp,
         });
-        if (result.attached) {
+        if (result.duplicate) {
+          console.log('[WhatsApp] Duplicate WhatsApp lead');
+        } else if (result.attached) {
           console.log('[WhatsApp] Updated existing WhatsApp lead:', result.lead.id, result.lead.phone);
         } else {
           console.log('[WhatsApp] WhatsApp lead created:', result.lead.id, result.lead.phone);
@@ -376,6 +374,7 @@ const processInboundMessage = async (value) => {
         leadId = result.lead?.id || null;
       } catch (err) {
         console.error('[WhatsApp] Failed to upsert WhatsApp lead:', err.message);
+        throw err;
       }
     }
 
@@ -418,27 +417,28 @@ const parseWebhookBody = (req) => {
   }
 };
 
+const processRawWebhook = async (rawText) => {
+  const body = parseWebhookBody({ rawBody: Buffer.from(rawText || '', 'utf8') });
+  await handleWhatsAppPayload(body);
+};
+
 const handleWebhookEvent = async (req, res) => {
   if (!verifySignature(req)) {
     console.warn('[WhatsApp] Invalid signature');
     return res.sendStatus(403);
   }
 
-  const body = parseWebhookBody(req);
-  res.sendStatus(200);
-
-  if (body?.object !== 'whatsapp_business_account' || !Array.isArray(body.entry)) {
-    return;
-  }
-
-  for (const entry of body.entry) {
-    for (const change of entry.changes || []) {
-      console.log('[WhatsApp] Webhook change:', change.field);
-      if (change.field !== 'messages') continue;
-      processInboundMessage(change.value || {}).catch((err) => {
-        console.error('[WhatsApp] Failed to process messages:', err.message);
-      });
-    }
+  const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body || {}));
+  try {
+    await acceptWebhookEvent({
+      source: 'whatsapp',
+      rawBody,
+      handler: processRawWebhook,
+    });
+    return res.sendStatus(200);
+  } catch (err) {
+    console.error('[WhatsApp] Webhook processing failed:', err.message);
+    return res.sendStatus(500);
   }
 };
 
@@ -459,6 +459,7 @@ module.exports = {
   verifyWebhook,
   handleWebhookEvent,
   handleWhatsAppPayload,
+  processRawWebhook,
   processInboundMessage,
   upsertCtwaLead,
 };

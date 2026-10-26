@@ -1,6 +1,16 @@
 const pool = require('../db');
-const { backfillLegacyRmNames } = require('../utils/notesHelper');
+const {
+  backfillLegacyRmNames,
+  filterNotesForViewer,
+  mergeNotesPreservingHidden,
+} = require('../utils/notesHelper');
+const {
+  recordManualAssignment,
+  handlePostStatusUpdate,
+} = require('../utils/autoReassign');
+const { REASSIGN_REASONS } = require('../utils/leadStatusRules');
 const { sendStatusChangeToMeta } = require('../utils/metaConversionsApi');
+const { resolveMissingFormNames } = require('../utils/metaFormNames');
 const multer = require('multer');
 const Papa = require('papaparse');
 const fetch = require('node-fetch');
@@ -8,13 +18,130 @@ const XLSX = require('xlsx');
 
 const upload = multer({ storage: multer.memoryStorage() });
 
+const {
+  buildCustomerId,
+  resolveCustomerIdDate,
+} = require('../utils/customerId');
+
 const normalizePhone = (p) => (p || '').replace(/\D/g, '').trim();
+
+const PAYMENT_LIMIT = 178000;
+
+const countPaymentEntries = (history) => {
+  if (!history || typeof history !== 'string' || !history.trim()) return 0;
+  return history.split('|||').filter((entry) => entry && entry.trim() !== '').length;
+};
+
+const sumPaymentAmounts = (history) => {
+  if (!history || typeof history !== 'string' || !history.trim()) return 0;
+  return history
+    .split('|||')
+    .filter((entry) => entry && entry.trim() !== '')
+    .reduce((sum, entry) => {
+      const amount = Number(String(entry.split('__')[0] || '').replace(/,/g, ''));
+      return sum + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+};
+
+const canDeletePayments = (role) => role === 'super_admin' || role === 'financial_manager';
+const canEditClientName = (role) =>
+  role === 'super_admin' || role === 'financial_manager' || role === 'admin' || role === 'team_leader';
+
+/** Paid clients / payments pages — includes payment_history. */
+const PAID_CLIENT_SELECT = `
+  l.id, l.full_name, l.phone, l.email, l.alt_number, l.status, l.team_id, l.date,
+  l.assigned_to, l.assigned_at, l.tags, l.language, l.customer_id,
+  l.payment_history, l.gender, l.dob, l.age, l.pan_card_number, l.aadhar_card_number,
+  u.display_name AS assigned_user_name, u.role AS assigned_user_role
+`;
+
+const getPaidClients = async (req, res) => {
+  const { role, id: user_id } = req.user;
+
+  try {
+    let result;
+
+    if (role === 'relationship_mgr') {
+      result = await pool.query(
+        `SELECT ${PAID_CLIENT_SELECT}
+         FROM leads l
+         LEFT JOIN users u ON l.assigned_to = u.id
+         WHERE l.status IN ('Paid Client', 'Won')
+           AND l.assigned_to = $1
+         ORDER BY l.customer_id DESC NULLS LAST, l.date DESC NULLS LAST`,
+        [user_id]
+      );
+    } else if (role === 'team_leader') {
+      const teamRes = await pool.query(
+        'SELECT team_id FROM users WHERE id = $1',
+        [user_id]
+      );
+      const teamId = teamRes.rows[0]?.team_id;
+      if (!teamId) {
+        return res.json([]);
+      }
+      result = await pool.query(
+        `SELECT ${PAID_CLIENT_SELECT}
+         FROM leads l
+         LEFT JOIN users u ON l.assigned_to = u.id
+         WHERE l.status IN ('Paid Client', 'Won')
+           AND l.team_id = $1
+         ORDER BY l.customer_id DESC NULLS LAST, l.date DESC NULLS LAST`,
+        [teamId]
+      );
+    } else {
+      result = await pool.query(
+        `SELECT ${PAID_CLIENT_SELECT}
+         FROM leads l
+         LEFT JOIN users u ON l.assigned_to = u.id
+         WHERE l.status IN ('Paid Client', 'Won')
+         ORDER BY l.customer_id DESC NULLS LAST, l.date DESC NULLS LAST`
+      );
+    }
+
+    console.log(`✅ Paid clients fetched: ${result.rows.length} (role=${role})`);
+    res.json(result.rows);
+  } catch (err) {
+    console.error('❌ Failed to fetch paid clients:', err.message);
+    res.status(500).json({ error: 'Failed to fetch paid clients' });
+  }
+};
+
+const getViewerDisplayName = async (userId) => {
+  if (!userId) return '';
+  const res = await pool.query('SELECT display_name FROM users WHERE id = $1', [userId]);
+  return res.rows[0]?.display_name || '';
+};
+
+const redactLeadNotesForViewer = (lead, { role, viewerRmName }) => {
+  if (!lead || role === 'super_admin') return lead;
+  return {
+    ...lead,
+    notes: filterNotesForViewer(lead.notes, {
+      role,
+      viewerRmName,
+      assignedRmName: lead.assigned_user_name || '',
+    }),
+  };
+};
 
 const getLeads = async (req, res) => {
   const { role, id: user_id } = req.user;
 
   try {
+    if (role === 'super_admin') {
+      try {
+        await Promise.race([
+          resolveMissingFormNames(),
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      } catch (err) {
+        console.warn('[Facebook] Form name backfill skipped:', err.message);
+      }
+    }
+
     let result;
+    const viewerRmName = await getViewerDisplayName(user_id);
 
     if (role === 'relationship_mgr') {
       console.log(`🔍 Fetching leads for RM with user_id: ${user_id}, role: ${role}`);
@@ -71,7 +198,10 @@ const getLeads = async (req, res) => {
         console.log(`✅ Super Admin fetched ${result.rows.length} leads`);
     }
 
-    res.json(result.rows);
+    const rows = result.rows.map((row) =>
+      redactLeadNotesForViewer(row, { role, viewerRmName })
+    );
+    res.json(rows);
   } catch (err) {
     console.error('❌ Failed to fetch leads:', err.message);
     res.status(500).json({ error: 'Failed to fetch leads' });
@@ -187,6 +317,7 @@ const addLead = async (req, res) => {
     });
 
     const assignedAt = safeAssignedTo ? new Date() : null;
+    const firstAssignedAt = safeAssignedTo ? assignedAt : null;
 
     const result = await pool.query(
       `INSERT INTO leads (
@@ -204,10 +335,12 @@ const addLead = async (req, res) => {
         team_id,
         assigned_to,
         assigned_at,
+        first_assigned_at,
+        nc_count,
         tags,
         language
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, $16, $17)
        RETURNING *`,
       [
         new Date(),
@@ -224,10 +357,32 @@ const addLead = async (req, res) => {
         safeTeamId,
         safeAssignedTo,
         assignedAt,
+        firstAssignedAt,
         tags || '',
         language || ''
       ]
     );
+
+    if (safeAssignedTo) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await recordManualAssignment(client, {
+          leadId: result.rows[0].id,
+          newRmId: safeAssignedTo,
+          previousRmId: null,
+          previousStatus: result.rows[0].status || 'New',
+          reason: REASSIGN_REASONS.INITIAL,
+          assignedAt,
+        });
+        await client.query('COMMIT');
+      } catch (histErr) {
+        try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+        console.error('⚠️ Failed to record initial assignment history:', histErr.message);
+      } finally {
+        client.release();
+      }
+    }
     
     console.log('✅ Lead inserted successfully:', {
       id: result.rows[0].id,
@@ -270,7 +425,7 @@ const updateLead = async (req, res) => {
     }
 
     const existingLeadRes = await pool.query(
-      'SELECT assigned_to, team_id, assigned_at, status, notes, meta_lead_id, email, phone FROM leads WHERE id = $1',
+      'SELECT assigned_to, team_id, assigned_at, status, notes, meta_lead_id, email, phone, first_assigned_at, payment_history, full_name, customer_id FROM leads WHERE id = $1',
       [id]
     );
 
@@ -280,8 +435,61 @@ const updateLead = async (req, res) => {
 
     const existingLead = existingLeadRes.rows[0];
     const previousStatus = existingLead.status;
+    const nextFullName = canEditClientName(role)
+      ? String(fullName || '').trim()
+      : (existingLead.full_name || fullName);
+
+    if (!nextFullName) {
+      return res.status(400).json({ error: 'Client name is required' });
+    }
+
+    if (paymentHistory !== undefined && !canDeletePayments(role)) {
+      const existingCount = countPaymentEntries(existingLead.payment_history);
+      const incomingCount = countPaymentEntries(paymentHistory);
+      if (incomingCount < existingCount) {
+        return res.status(403).json({
+          error: 'Only finance manager and super admin can delete payments'
+        });
+      }
+    }
+
+    if (paymentHistory !== undefined) {
+      const existingTotal = sumPaymentAmounts(existingLead.payment_history);
+      const incomingTotal = sumPaymentAmounts(paymentHistory);
+      const existingCount = countPaymentEntries(existingLead.payment_history);
+      const incomingCount = countPaymentEntries(paymentHistory);
+      // Block adding money / new rows once limit is reached or would be exceeded
+      if (
+        incomingTotal > existingTotal &&
+        (existingTotal >= PAYMENT_LIMIT || incomingTotal > PAYMENT_LIMIT)
+      ) {
+        return res.status(403).json({
+          error: 'Completed — payments cannot exceed ₹1,78,000'
+        });
+      }
+      if (existingTotal >= PAYMENT_LIMIT && incomingCount > existingCount) {
+        return res.status(403).json({
+          error: 'Completed — cannot add more payments'
+        });
+      }
+    }
+
     let notesValue = notes !== undefined ? notes : (existingLead.notes || '');
     const isRMorFM = role === 'relationship_mgr' || role === 'financial_manager';
+    const viewerRmName = await getViewerDisplayName(user_id);
+    let existingAssignedRmName = '';
+    if (existingLead.assigned_to) {
+      existingAssignedRmName = await getViewerDisplayName(existingLead.assigned_to);
+    }
+
+    // Non-super_admins receive a redacted notes view; merge so prior-RM history is kept.
+    if (notes !== undefined && role !== 'super_admin') {
+      notesValue = mergeNotesPreservingHidden(existingLead.notes, notes, {
+        role,
+        viewerRmName,
+        assignedRmName: existingAssignedRmName,
+      });
+    }
 
     // Normalize assigned_to - handle empty strings, null, undefined
     let finalAssignedTo = null;
@@ -325,9 +533,18 @@ const updateLead = async (req, res) => {
     }
 
     let assignedAtValue = existingLead.assigned_at;
+    let statusValue = status;
+    let assignmentChanged = false;
+    let firstAssignedAtValue = existingLead.first_assigned_at || null;
+    let resetNcCount = false;
+
     if (finalAssignedTo && finalAssignedTo !== existingLead.assigned_to) {
       assignedAtValue = new Date();
+      assignmentChanged = true;
+      resetNcCount = true;
+      firstAssignedAtValue = assignedAtValue;
       if (existingLead.assigned_to) {
+        statusValue = 'New';
         const prevRmRes = await pool.query(
           'SELECT display_name FROM users WHERE id = $1',
           [existingLead.assigned_to]
@@ -337,6 +554,25 @@ const updateLead = async (req, res) => {
       }
     } else if (!finalAssignedTo) {
       assignedAtValue = null;
+      if (existingLead.assigned_to) {
+        assignmentChanged = true;
+        resetNcCount = true;
+      }
+    }
+
+    // Assign sequential Customer ID when lead becomes a Paid Client (DT{FY}{####}, e.g. DT26270507)
+    let customerIdValue = existingLead.customer_id || null;
+    if (statusValue === 'Paid Client' && !customerIdValue) {
+      const nextIdRes = await pool.query(
+        "SELECT nextval('leads_customer_id_seq') AS next_id"
+      );
+      const nextNum = Number(nextIdRes.rows[0].next_id);
+      const fyDate = resolveCustomerIdDate({
+        paymentHistory,
+        date: existingLead.date,
+        assignedAt: assignedAtValue || existingLead.assigned_at,
+      });
+      customerIdValue = buildCustomerId(nextNum, fyDate);
     }
 
     const result = await pool.query(
@@ -345,10 +581,16 @@ const updateLead = async (req, res) => {
     deemat_account_name = $6, profession = $7, state_name = $8, capital = $9,
     segment = $10, gender = $11, dob = $12, age = $13, pan_card_number = $14,
     aadhar_card_number = $15, payment_history = $16, status = $17,
-    team_id = $18, assigned_to = $19, assigned_at = $20, tags = $21, language = $22
-   WHERE id = $23 RETURNING *`,
+    team_id = $18, assigned_to = $19, assigned_at = $20, tags = $21, language = $22,
+    first_assigned_at = CASE WHEN $25 THEN $23 ELSE first_assigned_at END,
+    nc_count = CASE WHEN $24 THEN 0 ELSE nc_count END,
+    twenty_four_hour_processed = CASE WHEN $25 THEN FALSE ELSE twenty_four_hour_processed END,
+    needs_manual_reassignment = CASE WHEN $25 THEN FALSE ELSE needs_manual_reassignment END,
+    manual_reassignment_reason = CASE WHEN $25 THEN NULL ELSE manual_reassignment_reason END,
+    customer_id = COALESCE(customer_id, $27)
+   WHERE id = $26 RETURNING *`,
   [
-    fullName,
+    nextFullName,
     email || null,
     phone,
     altNumber || '',
@@ -364,27 +606,101 @@ const updateLead = async (req, res) => {
     panCardNumber || '',
     aadharCardNumber || '',
     paymentHistory || '',
-    status,
+    statusValue,
     finalTeamId || null,
     finalAssignedTo || null,
     assignedAtValue,
     tags || '',
     language || '',
-    id
+    firstAssignedAtValue,
+    resetNcCount,
+    assignmentChanged && !!finalAssignedTo,
+    id,
+    customerIdValue
   ]
 );
 
-    console.log('✅ Update success:', result.rows[0]);
-    console.log('   Final assigned_to:', result.rows[0].assigned_to);
+    if (assignmentChanged && finalAssignedTo) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await recordManualAssignment(client, {
+          leadId: id,
+          newRmId: finalAssignedTo,
+          previousRmId: existingLead.assigned_to || null,
+          previousStatus,
+          reason: REASSIGN_REASONS.MANUAL,
+          assignedAt: assignedAtValue || new Date(),
+        });
+        await client.query('COMMIT');
+      } catch (histErr) {
+        try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+        console.error('⚠️ Failed to record assignment history on updateLead:', histErr.message);
+      } finally {
+        client.release();
+      }
+    } else if (assignmentChanged && !finalAssignedTo && existingLead.assigned_to) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { closeOpenAssignment } = require('../utils/autoReassign');
+        await closeOpenAssignment(client, id, existingLead.assigned_to, new Date());
+        await client.query('COMMIT');
+      } catch (histErr) {
+        try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+        console.error('⚠️ Failed to close assignment history on unassign:', histErr.message);
+      } finally {
+        client.release();
+      }
+    }
 
-    // Fire-and-forget CRM → Meta Conversions API on status change (Meta leads only)
-    if (result.rows[0].status !== previousStatus) {
-      sendStatusChangeToMeta(result.rows[0], previousStatus).catch((err) => {
+    let autoReassignment = null;
+    if (!assignmentChanged && result.rows[0]?.assigned_to) {
+      try {
+        autoReassignment = await handlePostStatusUpdate(pool, {
+          leadId: id,
+          newNotes: result.rows[0].notes,
+          assignedTo: result.rows[0].assigned_to,
+        });
+      } catch (autoErr) {
+        console.error('⚠️ Auto-reassignment post-update failed:', autoErr.message);
+      }
+    }
+
+    console.log('✅ Update success:', result.rows[0]?.id);
+    console.log('   Final assigned_to:', result.rows[0]?.assigned_to);
+
+    const responseLead = autoReassignment?.reassigned && autoReassignment?.reassignment?.lead
+      ? autoReassignment.reassignment.lead
+      : result.rows[0];
+
+    if (responseLead.status !== previousStatus) {
+      sendStatusChangeToMeta(responseLead, previousStatus).catch((err) => {
         console.error('[Meta CAPI] Background send failed:', err.message);
       });
     }
 
-    res.json(result.rows[0]);
+    let assignedUserName = responseLead.assigned_user_name || '';
+    if (!assignedUserName && responseLead.assigned_to) {
+      assignedUserName = await getViewerDisplayName(responseLead.assigned_to);
+    }
+
+    const safeLead = redactLeadNotesForViewer(
+      { ...responseLead, assigned_user_name: assignedUserName },
+      { role, viewerRmName }
+    );
+
+    res.json({
+      ...safeLead,
+      auto_reassignment: autoReassignment?.reassigned
+        ? {
+            triggered: true,
+            reason: autoReassignment.reassignment?.reason,
+            new_rm_id: autoReassignment.reassignment?.newRmId,
+            nc_count: autoReassignment.ncCount,
+          }
+        : { triggered: false, nc_count: autoReassignment?.ncCount ?? responseLead.nc_count },
+    });
 
   } catch (err) {
     console.error('[❌ updateLead Error]', err); 
@@ -417,7 +733,8 @@ const assignLead = async (req, res) => {
     console.log(`✅ Found user: ${userRes.rows[0].display_name}, team_id: ${userTeamId}`);
 
     const currentLeadRes = await pool.query(
-      'SELECT assigned_to, assigned_at, notes FROM leads WHERE id = $1',
+      `SELECT assigned_to, assigned_at, notes, status, first_assigned_at
+       FROM leads WHERE id = $1`,
       [id]
     );
 
@@ -429,10 +746,16 @@ const assignLead = async (req, res) => {
     const currentLead = currentLeadRes.rows[0];
     let newAssignedAt = currentLead.assigned_at;
     let notesToSave = currentLead.notes || '';
+    let resetStatus = false;
+    let assignmentChanged = false;
+    let firstAssignedAtValue = currentLead.first_assigned_at || null;
 
     if (assigned_to && assigned_to !== currentLead.assigned_to) {
       newAssignedAt = new Date();
+      assignmentChanged = true;
+      firstAssignedAtValue = newAssignedAt;
       if (currentLead.assigned_to) {
+        resetStatus = true;
         const prevRmRes = await pool.query(
           'SELECT display_name FROM users WHERE id = $1',
           [currentLead.assigned_to]
@@ -449,15 +772,51 @@ const assignLead = async (req, res) => {
        SET assigned_to = $1,
            team_id = COALESCE(team_id, $2),
            assigned_at = $4,
-           notes = $5
+           notes = $5,
+           status = CASE WHEN $6 THEN 'New' ELSE status END,
+           first_assigned_at = CASE WHEN $8 THEN $7 ELSE first_assigned_at END,
+           nc_count = CASE WHEN $8 THEN 0 ELSE nc_count END,
+           twenty_four_hour_processed = CASE WHEN $8 THEN FALSE ELSE twenty_four_hour_processed END,
+           needs_manual_reassignment = CASE WHEN $8 THEN FALSE ELSE needs_manual_reassignment END,
+           manual_reassignment_reason = CASE WHEN $8 THEN NULL ELSE manual_reassignment_reason END
        WHERE id = $3
        RETURNING *`,
-      [assigned_to, userTeamId, id, newAssignedAt, notesToSave]
+      [
+        assigned_to,
+        userTeamId,
+        id,
+        newAssignedAt,
+        notesToSave,
+        resetStatus,
+        firstAssignedAtValue,
+        assignmentChanged,
+      ]
     );
 
     if (result.rows.length === 0) {
       console.error(`❌ Lead ${id} not found`);
       return res.status(404).json({ error: 'Lead not found' });
+    }
+
+    if (assignmentChanged) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await recordManualAssignment(client, {
+          leadId: id,
+          newRmId: assigned_to,
+          previousRmId: currentLead.assigned_to || null,
+          previousStatus: currentLead.status,
+          reason: REASSIGN_REASONS.MANUAL,
+          assignedAt: newAssignedAt || new Date(),
+        });
+        await client.query('COMMIT');
+      } catch (histErr) {
+        try { await client.query('ROLLBACK'); } catch (_) { /* ignore */ }
+        console.error('⚠️ Failed to record assignment history on assignLead:', histErr.message);
+      } finally {
+        client.release();
+      }
     }
 
     console.log(`✅ Lead ${id} assigned successfully to ${assigned_to}`);
@@ -945,8 +1304,113 @@ const getNewLeadsCount = async (req, res) => {
   }
 };
 
+const parsePaymentEntries = (paymentHistory) => {
+  if (!paymentHistory) return [];
+  return String(paymentHistory)
+    .split('|||')
+    .filter((entry) => entry.trim() !== '')
+    .map((entry) => {
+      const parts = entry.split('__');
+      const approvedFlag = parts[3];
+      const approved =
+        approvedFlag === undefined ||
+        approvedFlag === '' ||
+        approvedFlag === '1' ||
+        approvedFlag === 'true';
+      const assignedTo = (parts[4] || '').trim();
+      return {
+        amount: parseFloat(parts[0] || '0') || 0,
+        date: (parts[1] || '').trim(),
+        approved,
+        assignedTo,
+        rm1: (parts[7] || parts[4] || '').trim(),
+        rm2: (parts[9] || '').trim(),
+      };
+    });
+};
+
+const getIstYearMonth = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+  }).format(date);
+};
+
+const addSalesCredit = (salesById, nameById, rmId, amount) => {
+  if (!rmId || !nameById.has(rmId) || amount <= 0) return;
+  salesById.set(rmId, (salesById.get(rmId) || 0) + amount);
+};
+
+const getStarPerformers = async (_req, res) => {
+  try {
+    const currentMonth = getIstYearMonth(new Date());
+    const [leadsRes, usersRes] = await Promise.all([
+      pool.query(
+        `SELECT assigned_to, payment_history
+         FROM leads
+         WHERE status IN ('Won', 'Paid Client')
+           AND payment_history IS NOT NULL
+           AND TRIM(payment_history) <> ''`
+      ),
+      pool.query(
+        `SELECT id, display_name
+         FROM users
+         WHERE role IN ('relationship_mgr', 'financial_manager')`
+      ),
+    ]);
+
+    const nameById = new Map(
+      usersRes.rows.map((u) => [u.id, u.display_name || 'Unknown'])
+    );
+    const salesById = new Map();
+
+    for (const lead of leadsRes.rows) {
+      for (const payment of parsePaymentEntries(lead.payment_history)) {
+        if (!payment.approved || payment.amount <= 0) continue;
+        if (getIstYearMonth(payment.date) !== currentMonth) continue;
+
+        if (payment.rm1 && payment.rm2) {
+          addSalesCredit(salesById, nameById, payment.rm1, payment.amount / 2);
+          addSalesCredit(salesById, nameById, payment.rm2, payment.amount / 2);
+        } else if (payment.rm1) {
+          addSalesCredit(salesById, nameById, payment.rm1, payment.amount);
+        } else if (payment.rm2) {
+          addSalesCredit(salesById, nameById, payment.rm2, payment.amount);
+        } else {
+          addSalesCredit(
+            salesById,
+            nameById,
+            payment.assignedTo || lead.assigned_to,
+            payment.amount
+          );
+        }
+      }
+    }
+
+    const performers = [...salesById.entries()]
+      .filter(([, sales]) => sales > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([id, sales], index) => ({
+        id,
+        name: nameById.get(id),
+        sales,
+        rank: index + 1,
+      }));
+
+    res.json({ performers, period: 'current_month' });
+  } catch (err) {
+    console.error('❌ Failed to get star performers:', err.message);
+    res.status(500).json({ error: 'Failed to get star performers' });
+  }
+};
+
 module.exports = {
   getLeads,
+  getPaidClients,
   addLead,
   updateLead,
   deleteLead,
@@ -954,5 +1418,6 @@ module.exports = {
   assignLead,
   googleSheetsUpload,
   getNewLeadsCount,
-  getFreeTrialAlerts
+  getFreeTrialAlerts,
+  getStarPerformers
 };

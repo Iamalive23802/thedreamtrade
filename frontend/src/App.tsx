@@ -1,21 +1,23 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
-import Dashboard from './pages/Dashboard';
-import UsersPage from './pages/UsersPage';
-import LeadsPage from './pages/LeadsPage';
-import TeamsPage from './pages/TeamsPage';
-import AssignTeamPage from './pages/AssignTeamPage';
-import LoginPage from './pages/LoginPage';
-import OfficeOnlyPage from './pages/OfficeOnlyPage';
-import ClientsPage from './pages/Clientpage';
-import AllClientsPage from './pages/AllClientsPage';
-import TestMetaleadsPage from './pages/TestMetaleadsPage';
-import WhatsAppInboxPage from './pages/WhatsAppInboxPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import LoadingScreen from './components/LoadingScreen';
 import { useAuthStore } from './stores/authStore';
 import { checkNetworkAccess } from './utils/networkAccess';
+import { homePathForRole } from './utils/homePath';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const UsersPage = lazy(() => import('./pages/UsersPage'));
+const LeadsPage = lazy(() => import('./pages/LeadsPage'));
+const TeamsPage = lazy(() => import('./pages/TeamsPage'));
+const AssignTeamPage = lazy(() => import('./pages/AssignTeamPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const OfficeOnlyPage = lazy(() => import('./pages/OfficeOnlyPage'));
+const ClientsPage = lazy(() => import('./pages/Clientpage'));
+const AllClientsPage = lazy(() => import('./pages/AllClientsPage'));
+const TestMetaleadsPage = lazy(() => import('./pages/TestMetaleadsPage'));
+const WhatsAppInboxPage = lazy(() => import('./pages/WhatsAppInboxPage'));
 
 function App() {
   const { isAuthenticated, loading, checkAuth } = useAuthStore();
@@ -49,17 +51,21 @@ function App() {
 
   if (location.pathname === '/office-only') {
     return (
-      <Routes>
-        <Route path="/office-only" element={<OfficeOnlyPage />} />
-      </Routes>
+      <Suspense fallback={<LoadingScreen />}>
+        <Routes>
+          <Route path="/office-only" element={<OfficeOnlyPage />} />
+        </Routes>
+      </Suspense>
     );
   }
 
   if (!networkAllowed && isAuthenticated && !isSuperAdmin) {
     return (
-      <Routes>
-        <Route path="*" element={<OfficeOnlyPage />} />
-      </Routes>
+      <Suspense fallback={<LoadingScreen />}>
+        <Routes>
+          <Route path="*" element={<OfficeOnlyPage />} />
+        </Routes>
+      </Suspense>
     );
   }
 
@@ -71,7 +77,15 @@ function App() {
     <Routes>
       <Route
         path="/login"
-        element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />}
+        element={
+          isAuthenticated ? (
+            <Navigate to={homePathForRole(role)} replace />
+          ) : (
+            <Suspense fallback={<LoadingScreen />}>
+              <LoginPage />
+            </Suspense>
+          )
+        }
       />
       <Route path="/" element={<Layout />}>
         <Route
@@ -125,7 +139,7 @@ function App() {
         <Route
           path="all-clients"
           element={
-            <ProtectedRoute allowedRoles={['financial_manager']}>
+            <ProtectedRoute allowedRoles={['super_admin', 'admin', 'team_leader', 'relationship_mgr', 'financial_manager']}>
               <AllClientsPage />
             </ProtectedRoute>
           }
@@ -146,7 +160,7 @@ function App() {
             </ProtectedRoute>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to={homePathForRole(role)} replace />} />
       </Route>
     </Routes>
   );

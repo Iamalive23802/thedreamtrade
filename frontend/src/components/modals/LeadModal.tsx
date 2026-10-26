@@ -10,6 +10,7 @@ import type { Lead } from '../../stores/leadStore';
 import {
   formatLeadNotes,
   parseNoteHistory,
+  filterNoteHistoryForViewer,
   type NoteHistoryEntry,
 } from '../../utils/notes';
 
@@ -197,11 +198,20 @@ const LeadModal: React.FC<LeadModalProps> = ({ isOpen, onClose, lead }) => {
       setLanguageSearchQuery(lead.language || '');
       
       const history = parseNoteHistory(lead.notes || '') as NoteHistoryEntry[];
+      const assignedRmName =
+        users.find((u) => u.id === lead.assigned_to)?.display_name ||
+        lead.assigned_user_name ||
+        '';
+      const visibleHistory = filterNoteHistoryForViewer(history, {
+        role,
+        viewerRmName: displayName || '',
+        assignedRmName,
+      });
 
       // For existing leads, just populate the saved history without
       // automatically adding a new empty row. Users can add a row
       // manually using the "+ Add Row" button.
-      setNoteHistory(history.reverse());
+      setNoteHistory(visibleHistory.reverse());
     } else {
       setFormData({
         fullName: '',
@@ -230,7 +240,7 @@ const LeadModal: React.FC<LeadModalProps> = ({ isOpen, onClose, lead }) => {
         setFormData(prev => ({ ...prev, tags: 'Added by RM' }));
       }
     }
-  }, [lead]);
+  }, [lead, users, role, displayName]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>

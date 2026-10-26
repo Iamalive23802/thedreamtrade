@@ -1,6 +1,7 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import { homePathForRole } from '../utils/homePath';
 
 interface ProtectedRouteProps {
   allowedRoles: string[];
@@ -15,7 +16,7 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allowedRoles, children 
   }
 
   if (!allowedRoles.includes(role)) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={homePathForRole(role)} replace />;
   }
 
   return <>{children}</>;

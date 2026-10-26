@@ -4,6 +4,7 @@ import { useTeamStore } from '../stores/teamStore';
 import { useUserStore } from '../stores/userStore';
 import TeamModal from '../components/modals/TeamModal';
 import ConfirmModal from '../components/modals/ConfirmModal';
+import PageHeader from '../components/PageHeader';
 
 function TeamsPage() {
   const { teams, fetchTeams, deleteTeam } = useTeamStore();
@@ -44,29 +45,36 @@ function TeamsPage() {
   };
 
   return (
-    <div className="container mx-auto">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">All Teams</h1>
-        <button
-          className="btn btn-primary flex items-center"
-          onClick={handleAddTeam}
-        >
-          <Plus size={18} className="mr-1" />
-          Add Team
-        </button>
-      </div>
+    <div>
+      <PageHeader
+        title="Teams"
+        description={`${teams.length.toLocaleString('en-IN')} teams`}
+        actions={
+          <button type="button" className="btn btn-primary" onClick={handleAddTeam}>
+            <Plus size={16} />
+            Add Team
+          </button>
+        }
+      />
 
-      <div className="bg-gray-800 rounded-lg overflow-hidden">
+      <div className="table-panel">
         <div className="table-container max-h-[80vh] overflow-y-auto">
           <table className="data-table">
-            <thead className="bg-gray-700 sticky top-0">
+            <thead className="sticky top-0 bg-shell">
               <tr>
                 <th>Team Name</th>
                 <th>Users</th>
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-700">
+            <tbody>
+              {teams.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="py-10 text-center text-sm text-gray-400">
+                    No teams yet.
+                  </td>
+                </tr>
+              )}
               {teams.map((team) => {
                 const userCount = users.filter((u) => u.team_id === team.id).length;
                 return (
@@ -76,16 +84,20 @@ function TeamsPage() {
                     <td>
                       <div className="flex space-x-2">
                         <button
+                          type="button"
+                          aria-label={`Edit ${team.name}`}
                           onClick={() => handleEditTeam(team)}
-                          className="p-1 text-blue-400 hover:text-blue-300 transition-colors"
+                          className="icon-btn text-sky-300"
                         >
-                          <Pencil size={18} />
+                          <Pencil size={16} />
                         </button>
                         <button
+                          type="button"
+                          aria-label={`Delete ${team.name}`}
                           onClick={() => handleDeleteTeam(team.id)}
-                          className="p-1 text-red-400 hover:text-red-300 transition-colors"
+                          className="icon-btn icon-btn-danger"
                         >
-                          <Trash2 size={18} />
+                          <Trash2 size={16} />
                         </button>
                       </div>
                     </td>
